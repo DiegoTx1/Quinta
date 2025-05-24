@@ -1,10 +1,20 @@
 
 let win = 0, loss = 0, timer = 60;
 let ultimos = [];
+let countdown = timer;
 
 function atualizarHora() {
   const agora = new Date();
   document.getElementById("hora").textContent = agora.toLocaleTimeString("pt-BR");
+}
+
+function atualizarCronometro() {
+  document.getElementById("proximaLeitura").textContent = countdown + "s";
+  countdown--;
+  if (countdown < 0) {
+    countdown = timer;
+    leituraReal();
+  }
 }
 
 function registrar(tipo) {
@@ -91,21 +101,17 @@ async function leituraReal() {
     if (close > (open + range / 2)) score++;
     if ((high - close) < range * 0.15 || (open - low) < range * 0.15) score++;
 
-    // Confirmação com vela anterior
     const openPrev = parseFloat(velaAnterior[1]);
     const closePrev = parseFloat(velaAnterior[4]);
     if ((close > open && closePrev > openPrev) || (close < open && closePrev < openPrev)) score++;
 
-    // Verificação de padrões
     if (detectarEngolfo(velaAtual, velaAnterior)) score++;
     if (detectarMartelo(velaAtual)) score++;
     if (detectarEstrelaCadente(velaAtual)) score++;
 
-    // Tendência via SMA
     if (sma && close > sma) score++;
     else if (sma && close < sma) score--;
 
-    // RSI zonas
     if (rsi > 70) score--;
     else if (rsi < 30) score++;
 
@@ -125,6 +131,7 @@ async function leituraReal() {
     ];
 
     document.getElementById("criterios").innerHTML = criterios.map(c => `<li>${c}</li>`).join("");
+    document.getElementById("ultimaAnalise").textContent = new Date().toLocaleTimeString("pt-BR");
 
   } catch (e) {
     console.error("Erro na leitura:", e);
@@ -132,4 +139,4 @@ async function leituraReal() {
 }
 
 setInterval(atualizarHora, 1000);
-setInterval(leituraReal, timer * 1000);
+setInterval(atualizarCronometro, 1000);
