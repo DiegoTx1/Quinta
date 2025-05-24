@@ -1,11 +1,6 @@
 
-let win = 0, loss = 0;
+let win = 0, loss = 0, timer = 60;
 let ultimos = [];
-let stopAtivo = false;
-let ws = null;
-
-const APP_ID = "1089";
-const SYMBOL = "frxEURUSD";
 
 function atualizarHora() {
   const agora = new Date();
@@ -16,253 +11,125 @@ function registrar(tipo) {
   if (tipo === 'WIN') win++;
   else loss++;
   document.getElementById("historico").textContent = `${win} WIN / ${loss} LOSS`;
-  if (loss >= 2) {
-    stopAtivo = true;
-    document.getElementById("comando").textContent = "STOP";
-  }
 }
 
-function calcularRSI(candles) {
+function calcularSMA(data, period) {
+  if (data.length < period) return null;
+  let sum = 0;
+  for (let i = data.length - period; i < data.length; i++) {
+    sum += parseFloat(data[i]);
+  }
+  return sum / period;
+}
+
+function calcularRSI(closes, period) {
   let gains = 0, losses = 0;
-  for (let i = 1; i < candles.length; i++) {
-    const diff = candles[i].close - candles[i - 1].close;
-    if (diff > 0) gains += diff;
+  for (let i = closes.length - period; i < closes.length - 1; i++) {
+    let diff = closes[i + 1] - closes[i];
+    if (diff >= 0) gains += diff;
     else losses -= diff;
   }
-  const avgGain = gains / candles.length;
-  const avgLoss = losses / candles.length;
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
+  let rs = gains / (losses || 1);
   return 100 - (100 / (1 + rs));
 }
 
-function detectarEngolfo(open1, close1, open2, close2) {
-  return (close2 > open2 && open2 < close1 && close2 > open1) ||
-         (close2 < open2 && open2 > close1 && close2 < open1) ? 1 : 0;
+function detectarEngolfo(velaAtual, velaAnterior) {
+  let open = parseFloat(velaAtual[1]);
+  let close = parseFloat(velaAtual[4]);
+  let openPrev = parseFloat(velaAnterior[1]);
+  let closePrev = parseFloat(velaAnterior[4]);
+  return (close > open && closePrev < openPrev && close > openPrev && open < closePrev) ||
+         (close < open && closePrev > openPrev && close < openPrev && open > closePrev);
 }
 
-function cruzamentoSMA(candles) {
-  const sma = (data, periodo) => data.slice(-periodo).reduce((s, c) => s + c.close, 0) / periodo;
-  const sma5_antes = (candles.slice(-6, -1)).reduce((s, c) => s + c.close, 0) / 5;
-  const sma10_antes = (candles.slice(-11, -6)).reduce((s, c) => s + c.close, 0) / 5;
-  if (sma5_antes > sma10_antes) return "CALL";
-  else if (sma5_antes < sma10_antes) return "PUT";
-  return "ESPERAR";
+function detectarMartelo(vela) {
+  let open = parseFloat(vela[1]);
+  let close = parseFloat(vela[4]);
+  let high = parseFloat(vela[2]);
+  let low = parseFloat(vela[3]);
+  let body = Math.abs(close - open);
+  let lowerShadow = open < close ? open - low : close - low;
+  let upperShadow = high - Math.max(open, close);
+  return lowerShadow > 2 * body && upperShadow < body;
 }
 
-function forcaVelas(candles) {
-  let altas = 0, baixas = 0;
-  for (let i = candles.length - 3; i < candles.length; i++) {
-    if (candles[i].close > candles[i].open) altas++;
-    else if (candles[i].close < candles[i].open) baixas++;
-  }
-  if (altas >= 3) return "CALL";
-  else if (baixas >= 3) return "PUT";
-  return "ESPERAR";
+function detectarEstrelaCadente(vela) {
+  let open = parseFloat(vela[1]);
+  let close = parseFloat(vela[4]);
+  let high = parseFloat(vela[2]);
+  let low = parseFloat(vela[3]);
+  let body = Math.abs(close - open);
+  let upperShadow = high - Math.max(open, close);
+  let lowerShadow = Math.min(open, close) - low;
+  return upperShadow > 2 * body && lowerShadow < body;
 }
 
-
-function calcularEMA(candles, periodo = 10) {
-  let k = 2 / (periodo + 1);
-  let ema = candles[0].close;
-  for (let i = 1; i < candles.length; i++) {
-    ema = candles[i].close * k + ema * (1 - k);
-  }
-  return ema;
-}
-
-
-
-function avaliarSinal(candles) {
-  let criterios = [];
-  let score = 0;
-
-  const rsi = calcularRSI(candles);
-  if (rsi > 60) {
-    criterios.push("RSI alto");
-    score += 20;
-  } else if (rsi < 40) {
-    criterios.push("RSI baixo");
-    score += 20;
-  }
-
-  if (detectarEngolfo(candles[8].open, candles[8].close, candles[9].open, candles[9].close)) {
-    criterios.push("Padrão de Engolfo");
-    score += 20;
-  }
-
-  const tendencia = forcaVelas(candles);
-  if (tendencia !== "ESPERAR") {
-    criterios.push("Força das Velas: " + tendencia);
-    score += 20;
-  }
-
-  const sma = cruzamentoSMA(candles);
-  const ema = calcularEMA(candles);
-  if ((sma === "CALL" && candles[candles.length - 1].close > ema) ||
-      (sma === "PUT" && candles[candles.length - 1].close < ema)) {
-    criterios.push("Confirmação por EMA");
-    score += 20;
-  }
-
-  if (sma !== "ESPERAR") {
-    criterios.push("SMA: " + sma);
-    score += 40;
-  }
-
-  let sinalFinal = "ESPERAR";
-  if (score >= 85) {
-    sinalFinal = sma !== "ESPERAR" ? sma : tendencia;
-  }
-
-  document.getElementById("comando").textContent = sinalFinal;
-  return { sinal: sinalFinal, score, criterios };
-}
-
-
-function atualizarInterface(sinal, score, criterios) {
-  if (!stopAtivo) {
-    document.getElementById("comando").textContent = sinal;
-    document.getElementById("score").textContent = `${score}%`;
-  }
-
-  const ul = document.getElementById("criterios");
-  ul.innerHTML = "";
-  criterios.forEach(c => {
-    const li = document.createElement("li");
-    li.textContent = c;
-    ul.appendChild(li);
-  });
-
-  ultimos.unshift(`${sinal} (${score}%)`);
-  if (ultimos.length > 5) ultimos.pop();
-
-  const ulUltimos = document.getElementById("ultimos");
-  ulUltimos.innerHTML = "";
-  ultimos.forEach(s => {
-    const li = document.createElement("li");
-    li.textContent = s;
-    ulUltimos.appendChild(li);
-  });
-
-  atualizarHora();
-}
-
-function conectarWebSocket() {
+async function leituraReal() {
   try {
-    ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
+    const r = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=50");
+    const dados = await r.json();
 
-    ws.onopen = function () {
-      ws.send(JSON.stringify({
-        ticks_history: SYMBOL,
-        adjust_start_time: 1,
-        count: 10,
-        end: "latest",
-        start: 1,
-        style: "candles",
-        granularity: 60
-      }));
-    };
+    const velaAtual = dados[dados.length - 1];
+    const velaAnterior = dados[dados.length - 2];
 
-    ws.onmessage = function (event) {
-      const data = JSON.parse(event.data);
-      if (!data.history || !data.history.candles) return;
+    const open = parseFloat(velaAtual[1]);
+    const high = parseFloat(velaAtual[2]);
+    const low = parseFloat(velaAtual[3]);
+    const close = parseFloat(velaAtual[4]);
+    const range = high - low;
+    const corpo = Math.abs(close - open);
 
-      const candles = data.history.candles;
-      const resultado = avaliarSinal(candles);
-      atualizarInterface(resultado.sinal, resultado.score, resultado.criterios);
+    const closes = dados.map(v => parseFloat(v[4]));
+    const sma = calcularSMA(closes, 14);
+    const rsi = calcularRSI(closes, 14);
 
-      setTimeout(() => {
-        ws.send(JSON.stringify({
-          ticks_history: SYMBOL,
-          adjust_start_time: 1,
-          count: 10,
-          end: "latest",
-          start: 1,
-          style: "candles",
-          granularity: 60
-        }));
-      }, 60000);
-    };
+    let score = 0;
 
-    ws.onerror = function (error) {
-      console.error("Erro na conexão WebSocket:", error);
-    };
+    if (close > open) score++;
+    if (corpo > open * 0.001) score++;
+    if (range > open * 0.002) score++;
+    if (close > (open + range / 2)) score++;
+    if ((high - close) < range * 0.15 || (open - low) < range * 0.15) score++;
 
-    ws.onclose = function () {
-      console.warn("WebSocket fechado. Tentando reconectar em 5 segundos...");
-      setTimeout(conectarWebSocket, 5000);
-    };
+    // Confirmação com vela anterior
+    const openPrev = parseFloat(velaAnterior[1]);
+    const closePrev = parseFloat(velaAnterior[4]);
+    if ((close > open && closePrev > openPrev) || (close < open && closePrev < openPrev)) score++;
+
+    // Verificação de padrões
+    if (detectarEngolfo(velaAtual, velaAnterior)) score++;
+    if (detectarMartelo(velaAtual)) score++;
+    if (detectarEstrelaCadente(velaAtual)) score++;
+
+    // Tendência via SMA
+    if (sma && close > sma) score++;
+    else if (sma && close < sma) score--;
+
+    // RSI zonas
+    if (rsi > 70) score--;
+    else if (rsi < 30) score++;
+
+    let comando = "ESPERAR";
+    if (score >= 7) comando = "CALL";
+    else if (score <= 2) comando = "PUT";
+
+    document.getElementById("comando").textContent = comando;
+    document.getElementById("score").textContent = `${(score / 10 * 100).toFixed(0)}%`;
+
+    const criterios = [
+      `SMA: ${sma ? sma.toFixed(2) : "N/A"}`,
+      `RSI: ${rsi.toFixed(2)}`,
+      `Engolfo: ${detectarEngolfo(velaAtual, velaAnterior) ? "Sim" : "Não"}`,
+      `Martelo: ${detectarMartelo(velaAtual) ? "Sim" : "Não"}`,
+      `Estrela Cadente: ${detectarEstrelaCadente(velaAtual) ? "Sim" : "Não"}`
+    ];
+
+    document.getElementById("criterios").innerHTML = criterios.map(c => `<li>${c}</li>`).join("");
+
   } catch (e) {
-    console.error("Erro ao conectar:", e);
+    console.error("Erro na leitura:", e);
   }
 }
 
-window.onload = function () {
-  
-  atualizarHora();
-};
-
-
-
-let tempoRestante = 60;
-setInterval(() => {
-  if (tempoRestante > 0) {
-    tempoRestante--;
-    document.getElementById("timer").textContent = tempoRestante;
-  }
-}, 1000);
-
-
-
-function buscarCandlesTwelveData() {
-  fetch("https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=1min&outputsize=10&apikey=demo")
-    .then(response => response.json())
-    .then(data => {
-      if (!data.values || data.values.length === 0) return;
-
-      // Reverter para ordem cronológica
-      tempoRestante = 60;
-      const candles = data.values.reverse().map(c => ({
-        open: parseFloat(c.open),
-        close: parseFloat(c.close)
-      }));
-
-      const resultado = avaliarSinal(candles);
-      atualizarInterface(resultado.sinal, resultado.score, resultado.criterios);
-    })
-    .catch(error => console.error("Erro ao buscar dados:", error));
-}
-
-// Atualizar a cada 60s
-setInterval(buscarCandlesTwelveData, 60000);
-window.onload = function () {
-  buscarCandlesTwelveData();
-  atualizarHora();
-};
-
-
-// Reiniciar operação automaticamente após 5 minutos de STOP
-setInterval(() => {
-  if (stopAtivo) {
-    console.log("Reiniciando após STOP...");
-    stopAtivo = false;
-    document.getElementById("comando").textContent = "REINICIADO";
-  }
-}, 300000); // 5 minutos
-
-
-function verificarResultado(candles, sinal) {
-  if (candles.length < 2 || (sinal !== "CALL" && sinal !== "PUT")) return;
-
-  const ultima = candles[candles.length - 2];
-  const atual = candles[candles.length - 1];
-
-  if (sinal === "CALL" && atual.close > ultima.close) {
-    registrar("WIN");
-  } else if (sinal === "PUT" && atual.close < ultima.close) {
-    registrar("WIN");
-  } else {
-    registrar("LOSS");
-  }
-}
+setInterval(atualizarHora, 1000);
+setInterval(leituraReal, timer * 1000);
